@@ -135,8 +135,8 @@ function Shell() {
       <div className="app-body">
         <Sidebar />
         <main className="content">
-          {/* 二级分类在主页与隐藏页都用得上；提醒 / 数据管理 / 关于 不需要 */}
-          {view === "main" || view === "vault" ? <SubCategoryBar /> : null}
+          {/* 二级分类胶囊属于分类筛选，隐藏页是独立页面，这里只在主视图显示 */}
+          {view === "main" ? <SubCategoryBar /> : null}
           {view === "main" ? <ItemGrid /> : null}
           {view === "reminder" ? <ReminderView /> : null}
           {view === "vault" ? <VaultView /> : null}

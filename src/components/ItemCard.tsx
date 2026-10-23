@@ -271,11 +271,17 @@ export function useItemClipboard(inVault = false) {
 
   const paste = useCallback(() => {
     if (!clipboard) return;
-    // 剪贴板里的名字可能已经和现有条目撞车，先问一句再真粘贴
-    guard(clipboard.items, () => {
-      pasteItems(inVault);
-      showToast("已粘贴");
-    });
+    // 剪贴板里的名字可能已经和现有条目撞车，先问一句再真粘贴；
+    // 源条目本身（粘贴成功前还在数据里）不算重名
+    const sourceIds = clipboard.items.map((item) => item.id);
+    guard(
+      clipboard.items,
+      () => {
+        pasteItems(inVault);
+        showToast("已粘贴");
+      },
+      sourceIds,
+    );
   }, [clipboard, guard, inVault, pasteItems, showToast]);
 
   // 键盘快捷键：在输入框里不拦截

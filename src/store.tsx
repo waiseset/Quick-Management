@@ -233,6 +233,12 @@ interface AppContextValue {
   data: AppData;
   categories: Category[];
   visibleItems: Item[];
+  /**
+   * 当前所在页面的条目范围（不受搜索影响），重名检测只跟它比：
+   * 隐藏页只看隐藏条目，收藏夹只看收藏，一级分类只含该分类的条目，
+   * 二级分类按它所属的一级分类算。
+   */
+  scopeItems: Item[];
   selectedItem: Item | null;
   /** 当前选中的条目（可多选） */
   selectedIds: string[];
@@ -381,7 +387,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           item.name.toLowerCase().includes(keyword) ||
           item.description.toLowerCase().includes(keyword),
       );
-    } else {
+    } else if (view !== "vault") {
+      // 隐藏页是独立页面：不按一级 / 二级分类筛选，永远列出全部隐藏条目
       if (selectedCategoryId === FAVORITES_CATEGORY_ID) {
         list = list.filter((item) => item.favorite);
       } else if (selectedCategoryId !== ALL_CATEGORY_ID) {
@@ -400,6 +407,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const id = selectedIds[selectedIds.length - 1];
     return data.items.find((item) => item.id === id) ?? null;
   }, [data.items, selectedIds]);
+
+  /** 当前所在页面的条目范围（不含搜索），重名检测只跟它比 */
+  const scopeItems = useMemo(() => {
+    if (view === "vault") return data.items.filter((item) => item.hidden);
+    const list = data.items.filter((item) => !item.hidden);
+    if (selectedCategoryId === FAVORITES_CATEGORY_ID) return list.filter((item) => item.favorite);
+    if (selectedCategoryId !== ALL_CATEGORY_ID) {
+      return list.filter((item) => item.categoryIds.includes(selectedCategoryId));
+    }
+    return list;
+  }, [data.items, selectedCategoryId, view]);
 
   /** 选中：普通单击替换、Ctrl+左键切换单个、Shift+左键成片选中 */
   const selectItem = useCallback(
@@ -525,6 +543,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     data,
     categories,
     visibleItems,
+    scopeItems,
     selectedItem,
     selectedIds,
     selectedCategoryId,

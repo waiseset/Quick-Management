@@ -125,8 +125,8 @@ export function SubCategoryBar() {
     });
   };
 
-  // 「全部」「收藏夹」不是真实的一级分类，二级分类在这里没有归属，因此整条不显示
-  if (!category) return null;
+  // 「全部」「收藏夹」不是真实的一级分类；隐藏页是独立页面，这两处都不显示胶囊行
+  if (!category || view === "vault") return null;
 
   return (
     <div

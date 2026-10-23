@@ -46,12 +46,16 @@ export function AddToDialog({ item, onClose }: { item: Item; onClose: () => void
         createdAt: Date.now(),
       });
     }
-    // 复制出去的这几份可能和已有条目重名，先问一句
-    guard(copies, () => {
-      for (const copy of copies) addItem(copy);
-      showToast(`已复制 ${copies.length} 份到所选分类`);
-      onClose();
-    });
+    // 复制出去的这几份可能和已有条目重名，先问一句（源条目本身不算）
+    guard(
+      copies,
+      () => {
+        for (const copy of copies) addItem(copy);
+        showToast(`已复制 ${copies.length} 份到所选分类`);
+        onClose();
+      },
+      [item.id],
+    );
   };
 
   return (

@@ -77,7 +77,7 @@ export function ellipsis(text: string, max = 48): string {
 }
 
 /** 应用版本号（显示用；打包版本号见 tauri.conf.json） */
-export const APP_VERSION = "3.3";
+export const APP_VERSION = "3.3.1";
 
 /** 项目主页 */
 export const PROJECT_URL = "https://github.com/waiseset/Quick-Management";

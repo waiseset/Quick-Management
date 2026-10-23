@@ -21,13 +21,16 @@ export function sameNameKey(name: string): string {
  * 名字没撞、或者根本没有条目时直接执行。
  */
 export function useNameConflictGuard() {
-  const { data } = useApp();
+  const { scopeItems } = useApp();
   const { conflict } = useUi();
 
   return useCallback(
-    (incoming: Item[], proceed: () => void) => {
+    (incoming: Item[], proceed: () => void, ignoreIds: string[] = []) => {
+      // 只跟「当前页面能看到的条目」比较；被复制 / 剪切的那个源条目本身不算重名
+      const ignored = new Set(ignoreIds);
       const byName = new Map<string, Item[]>();
-      for (const item of data.items) {
+      for (const item of scopeItems) {
+        if (ignored.has(item.id)) continue;
         const key = sameNameKey(item.name);
         const list = byName.get(key);
         if (list) list.push(item);
@@ -41,7 +44,7 @@ export function useNameConflictGuard() {
       if (pairs.length === 0) proceed();
       else conflict({ pairs, onConfirm: proceed });
     },
-    [conflict, data.items],
+    [conflict, scopeItems],
   );
 }
 

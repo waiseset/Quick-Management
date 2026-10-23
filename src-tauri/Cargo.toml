@@ -1,6 +1,6 @@
 [package]
 name = "quick-manage"
-version = "3.3.0"
+version = "3.3.1"
 description = "快捷管理 - 本地应用与网址快捷方式管理器"
 authors = ["waiseset"]
 edition = "2021"
