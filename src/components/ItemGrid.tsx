@@ -1,15 +1,8 @@
-import { useMemo, useState } from "react";
-
-import { chooseExecutables, pickIconFromPath, resolveTarget } from "../api";
+import { useAddItemFlow } from "../addItem";
 import { useDragList } from "../drag";
 import { useApp } from "../store";
-import { ALL_CATEGORY_ID, FAVORITES_CATEGORY_ID } from "../types";
-import type { IconData, ItemKind } from "../types";
-import { baseName, uid } from "../util";
 import { useContextMenu } from "./ContextMenu";
 import { ItemCard, useItemClipboard } from "./ItemCard";
-import { ItemEditor } from "./ItemEditor";
-import type { ItemDraft } from "./ItemEditor";
 
 /**
  * 参考文档第 4 行以下：条目网格。
@@ -17,96 +10,14 @@ import type { ItemDraft } from "./ItemEditor";
  * 这里只负责网格容器（点空白取消选中、右键「添加 / 批量添加应用 / 粘贴」）。
  */
 export function ItemGrid() {
-  const {
-    data,
-    visibleItems,
-    selectedCategoryId,
-    selectedSubCategoryName,
-    addItem,
-    selectItem,
-    reorderItems,
-    showToast,
-    clipboard,
-  } = useApp();
+  const { visibleItems, selectItem, reorderItems, clipboard } = useApp();
   const { open } = useContextMenu();
   const { paste } = useItemClipboard();
-
-  const [creating, setCreating] = useState<ItemKind | null>(null);
+  // 主视图里新增的条目是普通条目
+  const { startAdd, bulkAddApps, editor } = useAddItemFlow(false);
 
   const ids = visibleItems.map((item) => item.id);
   const drag = useDragList(ids, reorderItems);
-
-  const defaultCategoryIds =
-    selectedCategoryId === ALL_CATEGORY_ID || selectedCategoryId === FAVORITES_CATEGORY_ID
-      ? []
-      : [selectedCategoryId];
-
-  // 当前选中的二级分类名换算成 id（同名子分类可能分布在多个一级分类下）
-  const defaultSubCategoryIds = useMemo(() => {
-    if (!selectedSubCategoryName) return [];
-    const ids: string[] = [];
-    for (const category of data.categories) {
-      for (const sub of category.subcategories) {
-        if (sub.name === selectedSubCategoryName) ids.push(sub.id);
-      }
-    }
-    return ids;
-  }, [data.categories, selectedSubCategoryName]);
-
-  const inFavorites = selectedCategoryId === FAVORITES_CATEGORY_ID;
-
-  /** 批量添加应用：一次选多个文件，逐个提取图标后建条目 */
-  const bulkAddApps = async () => {
-    const paths = await chooseExecutables();
-    if (!paths.length) return;
-    showToast(`正在添加 ${paths.length} 个应用…`);
-    let order = data.items.reduce((max, entry) => Math.max(max, entry.order + 1), 0);
-    for (const path of paths) {
-      // 快捷方式先解析到真实目标，避免把 .lnk 本身当成应用
-      const target = (await resolveTarget(path)) ?? path;
-      let icon: IconData | null = null;
-      try {
-        icon = await pickIconFromPath(target);
-      } catch {
-        icon = null;
-      }
-      addItem({
-        id: uid(),
-        name: baseName(target),
-        description: "",
-        kind: "app",
-        target,
-        categoryIds: defaultCategoryIds,
-        subcategoryIds: defaultSubCategoryIds,
-        favorite: inFavorites,
-        hidden: false,
-        icon,
-        order: order++,
-        createdAt: Date.now(),
-      });
-    }
-    showToast(`已添加 ${paths.length} 个应用`);
-  };
-
-  const saveDraft = (draft: ItemDraft) => {
-    const order = data.items.reduce((max, entry) => Math.max(max, entry.order + 1), 0);
-    addItem({
-      id: uid(),
-      name: draft.name,
-      description: draft.description,
-      kind: draft.kind,
-      target: draft.target,
-      categoryIds: draft.categoryIds,
-      subcategoryIds: draft.subcategoryIds,
-      // 在收藏夹页面添加的条目直接就是收藏状态
-      favorite: draft.favorite || inFavorites,
-      hidden: false,
-      icon: draft.icon,
-      order,
-      createdAt: Date.now(),
-    });
-    setCreating(null);
-  };
 
   return (
     <>
@@ -122,7 +33,7 @@ export function ItemGrid() {
             x: event.clientX,
             y: event.clientY,
             items: [
-              { key: "add", label: "添加", onSelect: () => setCreating("app") },
+              { key: "add", label: "添加", onSelect: startAdd },
               { key: "bulk", label: "批量添加应用…", onSelect: () => void bulkAddApps() },
               {
                 key: "paste",
@@ -151,16 +62,7 @@ export function ItemGrid() {
         ) : null}
       </div>
 
-      {creating ? (
-        <ItemEditor
-          item={null}
-          defaultKind={creating}
-          defaultCategoryIds={defaultCategoryIds}
-          defaultSubCategoryIds={defaultSubCategoryIds}
-          onClose={() => setCreating(null)}
-          onSubmit={saveDraft}
-        />
-      ) : null}
+      {editor}
     </>
   );
 }

@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { hashPassword, makeSalt } from "../api";
+import { useAddItemFlow } from "../addItem";
 import { useDragList } from "../drag";
 import { useApp } from "../store";
 import type { VaultKind } from "../types";
@@ -193,6 +194,8 @@ function VaultItems() {
   const { visibleItems, clipboard, selectItem, reorderItems, setVaultUnlocked } = useApp();
   const { open } = useContextMenu();
   const { paste } = useItemClipboard(true);
+  // 隐藏区里新增的条目直接就是隐藏状态
+  const { startAdd, bulkAddApps, editor } = useAddItemFlow(true);
 
   const ids = visibleItems.map((item) => item.id);
   const drag = useDragList(ids, reorderItems);
@@ -216,6 +219,8 @@ function VaultItems() {
             x: event.clientX,
             y: event.clientY,
             items: [
+              { key: "add", label: "添加", onSelect: startAdd },
+              { key: "bulk", label: "批量添加应用…", onSelect: () => void bulkAddApps() },
               {
                 key: "paste",
                 label: "粘贴",
@@ -238,10 +243,14 @@ function VaultItems() {
         {visibleItems.length === 0 ? (
           <div className="item-empty">
             <p>还没有隐藏的条目</p>
-            <p className="item-empty-hint">在条目上右键选择「隐藏」即可放进这里</p>
+            <p className="item-empty-hint">
+              右键空白处可以「添加」，也可以直接把文件拖进来；主视图里右键条目选「隐藏」也能放进来
+            </p>
           </div>
         ) : null}
       </div>
+
+      {editor}
     </section>
   );
 }

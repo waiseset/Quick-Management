@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { MouseEvent } from "react";
 
+import { useNameConflictGuard } from "../addItem";
 import { openItem, revealInExplorer } from "../api";
 import type { DragList } from "../drag";
 import { useApp } from "../store";
@@ -248,6 +249,7 @@ export function ItemCard({
  */
 export function useItemClipboard(inVault = false) {
   const { clipboard, selectedIds, copyItems, cutItems, pasteItems, showToast } = useApp();
+  const guard = useNameConflictGuard();
 
   const copy = useCallback(
     (ids: string[]) => {
@@ -269,9 +271,12 @@ export function useItemClipboard(inVault = false) {
 
   const paste = useCallback(() => {
     if (!clipboard) return;
-    pasteItems(inVault);
-    showToast("已粘贴");
-  }, [clipboard, inVault, pasteItems, showToast]);
+    // 剪贴板里的名字可能已经和现有条目撞车，先问一句再真粘贴
+    guard(clipboard.items, () => {
+      pasteItems(inVault);
+      showToast("已粘贴");
+    });
+  }, [clipboard, guard, inVault, pasteItems, showToast]);
 
   // 键盘快捷键：在输入框里不拦截
   useEffect(() => {

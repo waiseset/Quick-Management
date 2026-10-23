@@ -3,27 +3,22 @@ import type { MouseEvent } from "react";
 
 import { useDragList } from "../drag";
 import { useApp } from "../store";
+import type { SubCategory } from "../types";
 import { useUi } from "../ui";
 import { cx, sortByOrder } from "../util";
 import { useContextMenu } from "./ContextMenu";
 
-/** 一个胶囊代表什么：聚合视图会把同名子分类合并进同一条 */
-interface ChipEntry {
-  name: string;
-  refs: Array<{ id: string; categoryId: string; categoryName: string }>;
-}
-
 /**
  * 参考文档第 3 行：二级分类用椭圆胶囊呈现，过多时自动换行。
- * - 选中具体分类：展示该分类的子分类，可拖拽排序。
- * - 「全部」「收藏夹」：聚合所有分类的子分类，同名只保留一个胶囊（筛选时一并命中）。
- * - 任何视图下都能新建子分类：聚合视图会先问清归属哪个一级分类。
+ *
+ * 二级分类**只属于某一个一级分类**：只有选中具体分类时才出现，
+ * 「全部」「收藏夹」这类聚合视图直接不渲染（同名子分类不会再被合并到一起）。
  */
 export function SubCategoryBar() {
   const {
     categories,
     selectedCategoryId,
-    selectedSubCategoryName,
+    selectedSubCategoryId,
     selectSubCategory,
     addSubCategory,
     renameSubCategory,
@@ -40,118 +35,52 @@ export function SubCategoryBar() {
   // 只有在主视图里才显示「当前所在分类」的选中色
   const isMain = view === "main";
 
-  const chips = useMemo<ChipEntry[]>(() => {
-    // 没有任何条目的二级分类不显示；本次运行内刚建的先留着，重开应用时才清理
+  // 没有任何条目的二级分类不显示；本次运行内刚建的先留着，重开应用时才清理
+  const chips = useMemo(() => {
+    if (!category) return [];
     const keep = (id: string) =>
       data.items.some((item) => item.subcategoryIds.includes(id)) || sessionSubIds.includes(id);
+    return sortByOrder(category.subcategories).filter((sub) => keep(sub.id));
+  }, [category, data.items, sessionSubIds]);
 
-    if (category) {
-      return sortByOrder(category.subcategories)
-        .filter((sub) => keep(sub.id))
-        .map((sub) => ({
-          name: sub.name,
-          refs: [{ id: sub.id, categoryId: category.id, categoryName: category.name }],
-        }));
-    }
-    const merged = new Map<string, ChipEntry>();
-    for (const entry of categories) {
-      for (const sub of sortByOrder(entry.subcategories)) {
-        if (!keep(sub.id)) continue;
-        const ref = { id: sub.id, categoryId: entry.id, categoryName: entry.name };
-        const found = merged.get(sub.name);
-        if (found) found.refs.push(ref);
-        else merged.set(sub.name, { name: sub.name, refs: [ref] });
-      }
-    }
-    return [...merged.values()];
-  }, [category, categories, data.items, sessionSubIds]);
+  const ids = chips.map((sub) => sub.id);
+  const { handlers, activeId, overId, consumeDragClick } = useDragList(ids, (next) => {
+    if (category) reorderSubCategories(category.id, next);
+  });
 
-  // 聚合视图的胶囊顺序跨分类，拖拽排序没有意义，只在具体分类下启用
-  const ids = category ? chips.map((entry) => entry.refs[0].id) : [];
-  const { handlers, activeId, overId, consumeDragClick } = useDragList(
-    ids,
-    (next) => {
-      if (category) reorderSubCategories(category.id, next);
-    },
-    category !== null,
-  );
-
-  const promptCreate = (categoryId: string, categoryName: string) => {
+  const requestCreate = () => {
+    if (!category) return;
     prompt({
-      title: `在「${categoryName}」下新建子分类`,
+      title: `在「${category.name}」下新建子分类`,
       label: "子分类名称",
       placeholder: "例如：编辑器",
       confirmText: "创建",
-      onSubmit: (value) => addSubCategory(categoryId, value),
+      onSubmit: (value) => addSubCategory(category.id, value),
     });
   };
 
-  /** 新建子分类：具体分类下直接建；「全部」「收藏夹」下先选归属分类 */
-  const requestCreate = () => {
-    if (category) {
-      promptCreate(category.id, category.name);
-      return;
-    }
-    if (categories.length === 0) {
-      choose({
-        title: "还没有一级分类",
-        message: "二级分类需要属于某个一级分类，请先点左下角「新建分类」。",
-        options: [{ key: "ok", label: "知道了" }],
-        onSelect: () => undefined,
-      });
-      return;
-    }
-    choose({
-      title: "新建二级分类",
-      message: "它要放进哪个一级分类？",
-      options: categories.map((entry) => ({
-        key: entry.id,
-        label: entry.name,
-        description:
-          entry.subcategories.length > 0
-            ? `已有 ${entry.subcategories.length} 个子分类`
-            : "还没有子分类",
-      })),
-      onSelect: (key) => {
-        const target = categories.find((entry) => entry.id === key);
-        if (target) promptCreate(target.id, target.name);
-      },
-    });
-  };
-
-  /** 合并后的胶囊可能对应多个子分类，重命名会一并生效 */
-  const requestRename = (entry: ChipEntry) => {
+  const requestRename = (sub: SubCategory) => {
+    if (!category) return;
     prompt({
-      title: entry.refs.length > 1 ? `重命名（${entry.refs.length} 处同名）` : "重命名子分类",
+      title: "重命名子分类",
       label: "子分类名称",
-      initialValue: entry.name,
+      initialValue: sub.name,
       confirmText: "保存",
-      onSubmit: (value) => {
-        for (const ref of entry.refs) renameSubCategory(ref.categoryId, ref.id, value);
-      },
+      onSubmit: (value) => renameSubCategory(category.id, sub.id, value),
     });
   };
 
-  /** 删除子分类同样要交代它下面的条目 */
-  const requestDelete = (entry: ChipEntry) => {
-    const subIds = new Set(entry.refs.map((ref) => ref.id));
-    const count = data.items.filter((item) =>
-      item.subcategoryIds.some((id) => subIds.has(id)),
-    ).length;
-    const scope =
-      entry.refs.length > 1
-        ? `「${entry.name}」在 ${entry.refs.length} 个分类下都存在（已合并显示），将一起处理。`
-        : undefined;
-
-    const apply = (mode: "delete-items" | "keep-items") => {
-      for (const ref of entry.refs) removeSubCategory(ref.categoryId, ref.id, mode);
-    };
+  /** 删除子分类要交代它下面的条目 */
+  const requestDelete = (sub: SubCategory) => {
+    if (!category) return;
+    const count = data.items.filter((item) => item.subcategoryIds.includes(sub.id)).length;
+    const apply = (mode: "delete-items" | "keep-items") =>
+      removeSubCategory(category.id, sub.id, mode);
 
     if (count === 0) {
       choose({
         title: "删除子分类",
-        message: `确定删除「${entry.name}」吗？`,
-        description: scope,
+        message: `确定删除「${sub.name}」吗？`,
         options: [{ key: "keep-items", label: "删除", danger: true }],
         onSelect: () => apply("keep-items"),
       });
@@ -159,8 +88,7 @@ export function SubCategoryBar() {
     }
     choose({
       title: "删除子分类",
-      message: `「${entry.name}」下还有 ${count} 个条目，要一起删除吗？`,
-      description: scope,
+      message: `「${sub.name}」下还有 ${count} 个条目，要一起删除吗？`,
       options: [
         {
           key: "delete-items",
@@ -178,7 +106,7 @@ export function SubCategoryBar() {
     });
   };
 
-  const openSubMenu = (event: MouseEvent, entry: ChipEntry) => {
+  const openSubMenu = (event: MouseEvent, sub: SubCategory) => {
     event.preventDefault();
     event.stopPropagation();
     open({
@@ -186,20 +114,19 @@ export function SubCategoryBar() {
       y: event.clientY,
       header: (
         <div className="menu-header-block">
-          <span className="menu-header-title">{entry.name}</span>
-          <span className="menu-header-meta">
-            {entry.refs.length > 1
-              ? `${entry.refs.length} 个分类下的同名子分类`
-              : `${entry.refs[0].categoryName} 下的子分类`}
-          </span>
+          <span className="menu-header-title">{sub.name}</span>
+          <span className="menu-header-meta">{category?.name} 下的子分类</span>
         </div>
       ),
       items: [
-        { key: "rename", label: "重命名", onSelect: () => requestRename(entry) },
-        { key: "delete", label: "删除", danger: true, onSelect: () => requestDelete(entry) },
+        { key: "rename", label: "重命名", onSelect: () => requestRename(sub) },
+        { key: "delete", label: "删除", danger: true, onSelect: () => requestDelete(sub) },
       ],
     });
   };
+
+  // 「全部」「收藏夹」不是真实的一级分类，二级分类在这里没有归属，因此整条不显示
+  if (!category) return null;
 
   return (
     <div
@@ -215,36 +142,32 @@ export function SubCategoryBar() {
     >
       <button
         type="button"
-        className={cx("chip", isMain && selectedSubCategoryName === null && "is-active")}
+        className={cx("chip", isMain && selectedSubCategoryId === null && "is-active")}
         onClick={() => selectSubCategory(null)}
       >
         全部
       </button>
 
-      {chips.map((entry) => (
+      {chips.map((sub) => (
         <div
-          key={entry.name}
-          data-drag-id={category ? entry.refs[0].id : undefined}
-          title={
-            entry.refs.length > 1
-              ? `${entry.refs.map((ref) => ref.categoryName).join("、")}（同名已合并）`
-              : entry.refs[0].categoryName
-          }
+          key={sub.id}
+          data-drag-id={sub.id}
+          title={category.name}
           className={cx(
             "chip",
-            category && "is-draggable",
-            isMain && selectedSubCategoryName === entry.name && "is-active",
-            activeId === entry.refs[0].id && "is-dragging",
-            overId === entry.refs[0].id && "is-drop-target",
+            "is-draggable",
+            isMain && selectedSubCategoryId === sub.id && "is-active",
+            activeId === sub.id && "is-dragging",
+            overId === sub.id && "is-drop-target",
           )}
           onClick={() => {
             if (consumeDragClick()) return;
-            selectSubCategory(entry.name);
+            selectSubCategory(sub.id);
           }}
-          onContextMenu={(event) => openSubMenu(event, entry)}
-          {...(category ? handlers(entry.refs[0].id) : {})}
+          onContextMenu={(event) => openSubMenu(event, sub)}
+          {...handlers(sub.id)}
         >
-          {entry.name}
+          {sub.name}
         </div>
       ))}
 

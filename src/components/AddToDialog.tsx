@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import { useNameConflictGuard } from "../addItem";
 import { useApp } from "../store";
 import type { Item } from "../types";
 import { cx, sortByOrder, uid } from "../util";
@@ -11,6 +12,7 @@ import { Modal } from "./Modal";
  */
 export function AddToDialog({ item, onClose }: { item: Item; onClose: () => void }) {
   const { categories, data, addItem, showToast } = useApp();
+  const guard = useNameConflictGuard();
   // 一级分类与二级分类都可以多选
   const [pickedCats, setPickedCats] = useState<string[]>([]);
   const [pickedSubs, setPickedSubs] = useState<string[]>([]);
@@ -28,10 +30,11 @@ export function AddToDialog({ item, onClose }: { item: Item; onClose: () => void
   const submit = () => {
     if (pickedCats.length === 0) return;
     let order = data.items.reduce((max, entry) => Math.max(max, entry.order + 1), 0);
+    const copies: Item[] = [];
     for (const catId of pickedCats) {
       const category = categories.find((entry) => entry.id === catId);
       const ownSubs = new Set(category?.subcategories.map((sub) => sub.id) ?? []);
-      addItem({
+      copies.push({
         ...item,
         id: uid(),
         // 「添加到…」复制出来的那几份一定放在普通分类里，能直接在主页看到
@@ -43,8 +46,12 @@ export function AddToDialog({ item, onClose }: { item: Item; onClose: () => void
         createdAt: Date.now(),
       });
     }
-    showToast(`已复制 ${pickedCats.length} 份到所选分类`);
-    onClose();
+    // 复制出去的这几份可能和已有条目重名，先问一句
+    guard(copies, () => {
+      for (const copy of copies) addItem(copy);
+      showToast(`已复制 ${copies.length} 份到所选分类`);
+      onClose();
+    });
   };
 
   return (

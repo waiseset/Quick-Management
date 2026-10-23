@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 
+import { useNameConflictGuard } from "./addItem";
 import { fetchFavicon, isTauri, pickIconFromPath } from "./api";
 import { AboutView } from "./components/AboutView";
 import { ContextMenuProvider } from "./components/ContextMenu";
@@ -13,7 +14,7 @@ import { TitleBar } from "./components/TitleBar";
 import { VaultView } from "./components/VaultView";
 import { AppProvider, useApp } from "./store";
 import { ALL_CATEGORY_ID, FAVORITES_CATEGORY_ID } from "./types";
-import type { DroppedEntry, IconData } from "./types";
+import type { DroppedEntry, IconData, Item } from "./types";
 import { UiProvider } from "./ui";
 import { uid } from "./util";
 
@@ -23,17 +24,32 @@ import { uid } from "./util";
  * 左侧 A 列分类栏，右侧依次是二级分类胶囊行与内容区。
  */
 function Shell() {
-  const { ready, view, setView, toast, data, addItem, selectedCategoryId, showToast } = useApp();
+  const {
+    ready,
+    view,
+    setView,
+    toast,
+    data,
+    addItem,
+    selectedCategoryId,
+    selectedSubCategoryId,
+    vaultUnlocked,
+    showToast,
+  } = useApp();
+  const guard = useNameConflictGuard();
 
   /** 从资源管理器拖进来的文件：Rust 已解析好快捷方式，这里取图标并建条目 */
   const handleDropped = useCallback(
     async (entries: DroppedEntry[]) => {
       if (!entries.length) return;
-      setView("main");
+      // 隐藏页与收藏夹都支持「就地添加」，其余视图拖进来先回主视图
+      const intoVault = view === "vault" && vaultUnlocked;
+      const intoFavorites = view === "main" && selectedCategoryId === FAVORITES_CATEGORY_ID;
+      if (!intoVault && !intoFavorites) setView("main");
       const inCategory =
         selectedCategoryId !== ALL_CATEGORY_ID && selectedCategoryId !== FAVORITES_CATEGORY_ID;
       let order = data.items.reduce((max, item) => Math.max(max, item.order + 1), 0);
-      let added = 0;
+      const items: Item[] = [];
       for (const entry of entries) {
         let icon: IconData | null = null;
         try {
@@ -44,25 +60,46 @@ function Shell() {
         } catch {
           icon = null;
         }
-        addItem({
+        items.push({
           id: uid(),
           name: entry.name,
           description: "",
           kind: entry.kind === "url" ? "url" : entry.kind === "file" ? "file" : "app",
           target: entry.target,
           categoryIds: inCategory ? [selectedCategoryId] : [],
-          subcategoryIds: [],
-          favorite: false,
-          hidden: false,
+          // 二级分类只属于一个一级分类，选中的那个就是目标
+          subcategoryIds: inCategory && selectedSubCategoryId ? [selectedSubCategoryId] : [],
+          // 在收藏夹页面拖入的条目直接是收藏状态
+          favorite: intoFavorites,
+          hidden: intoVault,
           icon,
           order: order++,
           createdAt: Date.now(),
         });
-        added += 1;
       }
-      showToast(`已从拖入的文件添加 ${added} 个条目`);
+      // 一次拖进好几个时，重名的一次问完再统一写入
+      guard(items, () => {
+        for (const item of items) addItem(item);
+        showToast(
+          intoVault
+            ? `已把 ${items.length} 个条目加进「隐藏的元素」`
+            : intoFavorites
+              ? `已把 ${items.length} 个条目加进收藏夹`
+              : `已从拖入的文件添加 ${items.length} 个条目`,
+        );
+      });
     },
-    [addItem, data.items, selectedCategoryId, setView, showToast],
+    [
+      addItem,
+      data.items,
+      guard,
+      selectedCategoryId,
+      selectedSubCategoryId,
+      setView,
+      showToast,
+      view,
+      vaultUnlocked,
+    ],
   );
 
   useEffect(() => {

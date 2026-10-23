@@ -5,6 +5,8 @@
 import { createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
+import { NameConflictDialog } from "./components/NameConflictDialog";
+import type { ConflictPair } from "./components/NameConflictDialog";
 import { ConfirmDialog, Modal, PromptDialog } from "./components/Modal";
 
 interface PromptOptions {
@@ -40,15 +42,24 @@ interface ChooseOptions {
   onSelect: (key: string) => void;
 }
 
+interface ConflictOptions {
+  /** 名称撞车的几组：准备新增的条目 + 已经存在的同名条目 */
+  pairs: ConflictPair[];
+  onConfirm: () => void;
+  onCancel?: () => void;
+}
+
 type Dialog =
   | ({ kind: "prompt" } & PromptOptions)
   | ({ kind: "confirm" } & ConfirmOptions)
-  | ({ kind: "choose" } & ChooseOptions);
+  | ({ kind: "choose" } & ChooseOptions)
+  | ({ kind: "conflict" } & ConflictOptions);
 
 interface UiApi {
   prompt: (options: PromptOptions) => void;
   confirm: (options: ConfirmOptions) => void;
   choose: (options: ChooseOptions) => void;
+  conflict: (options: ConflictOptions) => void;
 }
 
 const UiContext = createContext<UiApi | null>(null);
@@ -65,8 +76,14 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const choose = useCallback((options: ChooseOptions) => {
     setDialog({ kind: "choose", ...options });
   }, []);
+  const conflict = useCallback((options: ConflictOptions) => {
+    setDialog({ kind: "conflict", ...options });
+  }, []);
 
-  const api = useMemo<UiApi>(() => ({ prompt, confirm, choose }), [prompt, confirm, choose]);
+  const api = useMemo<UiApi>(
+    () => ({ prompt, confirm, choose, conflict }),
+    [prompt, confirm, choose, conflict],
+  );
   const close = useCallback(() => setDialog(null), []);
 
   return (
@@ -132,6 +149,19 @@ export function UiProvider({ children }: { children: ReactNode }) {
             ))}
           </div>
         </Modal>
+      ) : null}
+      {dialog?.kind === "conflict" ? (
+        <NameConflictDialog
+          pairs={dialog.pairs}
+          onCancel={() => {
+            close();
+            dialog.onCancel?.();
+          }}
+          onConfirm={() => {
+            close();
+            dialog.onConfirm();
+          }}
+        />
       ) : null}
     </UiContext.Provider>
   );

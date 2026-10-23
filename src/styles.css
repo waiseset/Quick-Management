@@ -1290,6 +1290,117 @@ body.is-dragging-item .sidebar-item {
   word-break: break-all;
 }
 
+/* ------------------------ 同名条目对比弹窗 ------------------------ */
+.conflict-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.conflict-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-soft);
+}
+
+.conflict-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+}
+
+.conflict-tag {
+  flex: none;
+  min-width: 32px;
+  padding: 1px var(--sp-1);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-2xs);
+  line-height: 18px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--surface-hover);
+}
+
+.conflict-tag-incoming {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.conflict-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  flex: 1;
+  min-width: 0;
+}
+
+.conflict-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.conflict-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  overflow: hidden;
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+
+.conflict-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.conflict-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.conflict-name {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.conflict-star {
+  font-size: var(--fs-xs);
+  color: var(--star);
+}
+
+.conflict-meta,
+.conflict-path,
+.conflict-desc {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.conflict-path {
+  color: var(--text-soft);
+}
+
 /* ============================== 提醒 / 备份 / 关于 ============================== */
 .view {
   flex: 1;

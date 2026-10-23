@@ -237,8 +237,8 @@ interface AppContextValue {
   /** 当前选中的条目（可多选） */
   selectedIds: string[];
   selectedCategoryId: string;
-  /** 选中的二级分类名称：「全部」视图会把同名子分类合并成一个胶囊 */
-  selectedSubCategoryName: string | null;
+  /** 选中的二级分类 id：二级分类只属于某一个一级分类，不跨分类合并 */
+  selectedSubCategoryId: string | null;
   view: ViewKey;
   /** 隐藏区是否已解锁；离开隐藏页会自动重新上锁 */
   vaultUnlocked: boolean;
@@ -249,7 +249,7 @@ interface AppContextValue {
   showToast: (text: string) => void;
   setView: (view: ViewKey) => void;
   selectCategory: (id: string) => void;
-  selectSubCategory: (name: string | null) => void;
+  selectSubCategory: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   selectItem: (id: string | null, mode?: SelectMode) => void;
   setTheme: (theme: Theme) => void;
@@ -291,7 +291,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 解锁状态放全局：标题栏要据此决定是否显示选中条目的描述
   const [vaultUnlocked, setVaultUnlockedState] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>(ALL_CATEGORY_ID);
-  const [selectedSubCategoryName, setSelectedSubCategoryName] = useState<string | null>(null);
+  const [selectedSubCategoryId, setSelectedSubCategoryId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   // 多选：selectedIds 是当前选中的全部条目，anchorId 记录范围选择的起点
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -302,7 +302,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
   const saveTimer = useRef<number | null>(null);
   const cleanedEmptySubs = useRef(false);
-  const cleanedDuplicates = useRef(false);
 
   // 启动时读取本地数据
   useEffect(() => {
@@ -322,20 +321,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       alive = false;
     };
   }, []);
-
-  // 启动后清掉完全重复的条目：类型 + 名称 + 路径都相同就只留一个
-  useEffect(() => {
-    if (!ready || cleanedDuplicates.current) return;
-    cleanedDuplicates.current = true;
-    const seen = new Set<string>();
-    const duplicates: string[] = [];
-    for (const item of sortByOrder(data.items)) {
-      const key = `${item.kind}|${item.name}|${item.target}`;
-      if (seen.has(key)) duplicates.push(item.id);
-      else seen.add(key);
-    }
-    for (const id of duplicates) dispatch({ type: "removeItem", id });
-  }, [ready, data.items]);
 
   // 启动后清掉没有任何条目的二级分类：
   // 用户当次手动建了但没放东西的，重新打开应用就不再保留
@@ -381,15 +366,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const categories = useMemo(() => sortByOrder(data.categories), [data.categories]);
 
-  // 子分类 id -> 名称：「全部」视图把同名子分类合并成一个胶囊，筛选时按名称匹配
-  const subcategoryNameById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const category of data.categories) {
-      for (const sub of category.subcategories) map.set(sub.id, sub.name);
-    }
-    return map;
-  }, [data.categories]);
-
   const visibleItems = useMemo(() => {
     const keyword = searchQuery.trim().toLowerCase();
     // 隐藏的条目只在「隐藏的元素」页里出现，其余视图一律看不到
@@ -411,32 +387,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } else if (selectedCategoryId !== ALL_CATEGORY_ID) {
         list = list.filter((item) => item.categoryIds.includes(selectedCategoryId));
       }
-      // 二级分类按名称筛选，条目可同时属于多个二级分类
-      if (selectedSubCategoryName) {
-        list = list.filter((item) =>
-          item.subcategoryIds.some(
-            (id) => subcategoryNameById.get(id) === selectedSubCategoryName,
-          ),
-        );
+      // 二级分类按 id 筛选：每个一级分类下的二级分类彼此独立，不会串到别的分类
+      if (selectedSubCategoryId) {
+        list = list.filter((item) => item.subcategoryIds.includes(selectedSubCategoryId));
       }
     }
-    // 完全一致的条目（类型 + 名称 + 路径都一样）只显示一个
-    const seen = new Set<string>();
-    const unique = list.filter((item) => {
-      const key = `${item.kind}|${item.name}|${item.target}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-    return sortByOrder(unique);
-  }, [
-    data.items,
-    selectedCategoryId,
-    selectedSubCategoryName,
-    subcategoryNameById,
-    searchQuery,
-    view,
-  ]);
+    // 同名同路径的条目也不再合并：用户既然确认添加了，就照实显示
+    return sortByOrder(list);
+  }, [data.items, selectedCategoryId, selectedSubCategoryId, searchQuery, view]);
 
   const selectedItem = useMemo(() => {
     const id = selectedIds[selectedIds.length - 1];
@@ -493,7 +451,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const selectCategory = useCallback((id: string) => {
     setSelectedCategoryId(id);
-    setSelectedSubCategoryName(null);
+    setSelectedSubCategoryId(null);
     setSelectedIds([]);
     setAnchorId(null);
     setView("main");
@@ -524,12 +482,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!clipboard) return;
       const inCategory =
         selectedCategoryId !== ALL_CATEGORY_ID && selectedCategoryId !== FAVORITES_CATEGORY_ID;
-      // 二级分类按名称记录，这里换算回目标分类下的具体 id
+      // 在收藏夹页面粘贴出来的副本直接是收藏状态
+      const inFavorites = selectedCategoryId === FAVORITES_CATEGORY_ID;
+      // 选中的二级分类只在它确实属于当前分类时才生效
       const targetSubcategoryId =
-        inCategory && selectedSubCategoryName
-          ? (data.categories
-              .find((entry) => entry.id === selectedCategoryId)
-              ?.subcategories.find((sub) => sub.name === selectedSubCategoryName)?.id ?? null)
+        inCategory &&
+        selectedSubCategoryId &&
+        data.categories
+          .find((entry) => entry.id === selectedCategoryId)
+          ?.subcategories.some((sub) => sub.id === selectedSubCategoryId)
+          ? selectedSubCategoryId
           : null;
       let order = data.items.reduce((max, entry) => Math.max(max, entry.order + 1), 0);
       for (const source of clipboard.items) {
@@ -538,6 +500,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           id: uid(),
           // 粘贴出来的副本跟着「当前所在的页面」走
           hidden: targetHidden,
+          favorite: inFavorites ? true : source.favorite,
           categoryIds: inCategory ? [selectedCategoryId] : source.categoryIds,
           subcategoryIds: inCategory
             ? targetSubcategoryId
@@ -554,7 +517,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setClipboard(null);
       }
     },
-    [clipboard, data.items, data.categories, selectedCategoryId, selectedSubCategoryName],
+    [clipboard, data.items, data.categories, selectedCategoryId, selectedSubCategoryId],
   );
 
   const value: AppContextValue = {
@@ -565,7 +528,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectedItem,
     selectedIds,
     selectedCategoryId,
-    selectedSubCategoryName,
+    selectedSubCategoryId,
     view,
     searchQuery,
     sessionIgnored,
@@ -577,8 +540,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setVaultUnlocked,
     selectCategory,
     // 点击二级分类时回到主视图，否则在提醒 / 数据管理等页面点胶囊看不到结果
-    selectSubCategory: (name) => {
-      setSelectedSubCategoryName(name);
+    selectSubCategory: (id) => {
+      setSelectedSubCategoryId(id);
       setSearchQuery("");
       setView("main");
     },
@@ -623,7 +586,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "clearData" });
       // 密码一起被清掉了，解锁状态也要归零
       setVaultUnlockedState(false);
-      setSelectedSubCategoryName(null);
+      setSelectedSubCategoryId(null);
       setSelectedIds([]);
       setAnchorId(null);
       setSessionIgnored([]);
@@ -633,7 +596,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     replaceAll: (next) => {
       dispatch({ type: "load", data: next });
       setSelectedCategoryId(ALL_CATEGORY_ID);
-      setSelectedSubCategoryName(null);
+      setSelectedSubCategoryId(null);
       setSelectedIds([]);
       setAnchorId(null);
       setSessionIgnored([]);
