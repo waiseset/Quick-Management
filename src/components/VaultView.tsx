@@ -191,7 +191,7 @@ export function VaultView() {
  * 只有「粘贴」落到隐藏区（副本仍是隐藏状态）。
  */
 function VaultItems() {
-  const { visibleItems, clipboard, selectItem, reorderItems, setVaultUnlocked } = useApp();
+  const { visibleItems, clipboard, selectItem, reorderItems, setVaultUnlocked, reload } = useApp();
   const { open } = useContextMenu();
   const { paste } = useItemClipboard(true);
   // 隐藏区里新增的条目直接就是隐藏状态
@@ -232,6 +232,8 @@ function VaultItems() {
                 disabled: !clipboard,
                 onSelect: paste,
               },
+              { key: "sep", separator: true },
+              { key: "refresh", label: "刷新", onSelect: () => void reload() },
             ],
           });
         }}

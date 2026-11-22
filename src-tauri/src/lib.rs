@@ -9,8 +9,8 @@ use tauri::{Emitter, Manager, WindowEvent};
 
 use commands::{
     check_paths, data_location, export_data, fetch_favicon_icon, hash_password, import_data,
-    load_data, make_salt, open_item, pick_icon_from_path, resolve_target, reveal_in_explorer,
-    save_data,
+    is_elevated, load_data, make_salt, open_item, pick_icon_from_path, resolve_target,
+    reveal_in_explorer, save_data,
 };
 
 pub fn run() {
@@ -38,7 +38,8 @@ pub fn run() {
             data_location,
             resolve_target,
             hash_password,
-            make_salt
+            make_salt,
+            is_elevated
         ])
         // 从资源管理器拖进来的文件：先解析快捷方式，再把结构化结果交给前端建条目
         .on_window_event(|window, event| {

@@ -271,9 +271,9 @@ export function useItemClipboard(inVault = false) {
 
   const paste = useCallback(() => {
     if (!clipboard) return;
-    // 剪贴板里的名字可能已经和现有条目撞车，先问一句再真粘贴；
-    // 源条目本身（粘贴成功前还在数据里）不算重名
-    const sourceIds = clipboard.items.map((item) => item.id);
+    // 剪切时源条目一会儿就会被删掉，不算重名；复制时源条目还在，
+    // 副本与它重名是真实情况，照常提示（例如复制到同一分类的另一个二级分类）
+    const sourceIds = clipboard.mode === "cut" ? clipboard.items.map((item) => item.id) : [];
     guard(
       clipboard.items,
       () => {

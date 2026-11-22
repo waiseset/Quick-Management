@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
 import * as api from "./api";
 import { ALL_CATEGORY_ID, FAVORITES_CATEGORY_ID, emptyData } from "./types";
 import type { AppData, Category, Item, SubCategory, Theme, Vault, ViewKey } from "./types";
-import { sortByOrder, uid } from "./util";
+import { sameNameKey, sortByOrder, uid } from "./util";
 
 /* ------------------------------- reducer ------------------------------- */
 
@@ -252,7 +252,7 @@ interface AppContextValue {
   sessionIgnored: string[];
   permanentlyIgnored: string[];
   toast: string | null;
-  showToast: (text: string) => void;
+  showToast: (text: string, durationMs?: number) => void;
   setView: (view: ViewKey) => void;
   selectCategory: (id: string) => void;
   selectSubCategory: (id: string | null) => void;
@@ -277,6 +277,8 @@ interface AppContextValue {
   restoreIgnored: (id: string) => void;
   clearData: () => void;
   replaceAll: (data: AppData) => void;
+  /** 从磁盘重新读一遍数据（右键「刷新」用），保留当前视图与分类 */
+  reload: () => Promise<void>;
   setVault: (vault: Vault | null) => void;
   setVaultUnlocked: (value: boolean) => void;
   clipboard: ClipboardEntry | null;
@@ -306,8 +308,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [clipboard, setClipboard] = useState<ClipboardEntry | null>(null);
   const [sessionSubIds, setSessionSubIds] = useState<string[]>([]);
   const [toast, setToast] = useState<string | null>(null);
+  const toastDuration = useRef(2000);
   const saveTimer = useRef<number | null>(null);
   const cleanedEmptySubs = useRef(false);
+
+  /** 顶部提示：默认 2 秒，重要提示（例如权限问题）可以传更长的时长 */
+  const showToast = useCallback((text: string, durationMs = 2000) => {
+    toastDuration.current = durationMs;
+    setToast(text);
+  }, []);
 
   // 启动时读取本地数据
   useEffect(() => {
@@ -366,7 +375,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(null), 2000);
+    const timer = window.setTimeout(() => setToast(null), toastDuration.current);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -399,7 +408,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         list = list.filter((item) => item.subcategoryIds.includes(selectedSubCategoryId));
       }
     }
-    // 同名同路径的条目也不再合并：用户既然确认添加了，就照实显示
+    // 聚合位置（全部 / 收藏夹 / 隐藏页 / 搜索结果）里同名条目只显示一条；
+    // 具体一级分类下仍各自照实显示，不丢信息
+    const aggregate =
+      Boolean(keyword) ||
+      view === "vault" ||
+      selectedCategoryId === ALL_CATEGORY_ID ||
+      selectedCategoryId === FAVORITES_CATEGORY_ID;
+    if (aggregate) {
+      const seen = new Set<string>();
+      list = list.filter((item) => {
+        const key = sameNameKey(item.name);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
     return sortByOrder(list);
   }, [data.items, selectedCategoryId, selectedSubCategoryId, searchQuery, view]);
 
@@ -553,7 +577,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sessionIgnored,
     permanentlyIgnored: data.settings.permanentlyIgnored,
     toast,
-    showToast: setToast,
+    showToast,
     setView,
     vaultUnlocked,
     setVaultUnlocked,
@@ -621,6 +645,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setSessionIgnored([]);
       setClipboard(null);
       setSearchQuery("");
+    },
+    // 从磁盘重新读一遍数据：外部改过 data.json、或只是想让界面回到最新状态时用
+    reload: async () => {
+      try {
+        const loaded = await api.loadData();
+        dispatch({ type: "load", data: loaded });
+        // 只重置跟数据内容强相关的界面状态，当前所在的分类 / 视图保持不变
+        setSelectedIds([]);
+        setAnchorId(null);
+        setSearchQuery("");
+        setSessionSubIds([]);
+        showToast("已刷新");
+      } catch {
+        showToast("刷新失败");
+      }
     },
     clipboard,
     sessionSubIds,

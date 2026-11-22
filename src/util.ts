@@ -62,6 +62,11 @@ export function hostOf(url: string): string {
   }
 }
 
+/** 重名判定用的键：忽略大小写与首尾空格（重名询问与聚合视图去重都用它） */
+export function sameNameKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /** 文本 -> base64（用于内联 SVG 图标） */
 export function textToBase64(text: string): string {
   const bytes = new TextEncoder().encode(text);
@@ -77,7 +82,7 @@ export function ellipsis(text: string, max = 48): string {
 }
 
 /** 应用版本号（显示用；打包版本号见 tauri.conf.json） */
-export const APP_VERSION = "3.3.1";
+export const APP_VERSION = "3.3.3";
 
 /** 项目主页 */
 export const PROJECT_URL = "https://github.com/waiseset/Quick-Management";

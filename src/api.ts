@@ -126,6 +126,20 @@ export async function makeSalt(): Promise<string> {
   return await invoke<string>("make_salt");
 }
 
+/**
+ * 当前进程是否以管理员身份运行。
+ * 提权后 Windows 的 UIPI 会拦掉从资源管理器拖入的文件（鼠标显示禁止图标），
+ * 启动时据此提示用户换成普通权限启动。
+ */
+export async function isElevated(): Promise<boolean> {
+  if (!isTauri()) return false;
+  try {
+    return await invoke<boolean>("is_elevated");
+  } catch {
+    return false;
+  }
+}
+
 /** 当前数据文件位置与是否便携模式 */
 export async function dataLocation(): Promise<DataLocation | null> {
   if (!isTauri()) return null;

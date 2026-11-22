@@ -2,7 +2,7 @@ import { useCallback, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { useNameConflictGuard } from "./addItem";
-import { fetchFavicon, isTauri, pickIconFromPath } from "./api";
+import { fetchFavicon, isElevated, isTauri, pickIconFromPath } from "./api";
 import { AboutView } from "./components/AboutView";
 import { ContextMenuProvider } from "./components/ContextMenu";
 import { DataView } from "./components/DataView";
@@ -117,6 +117,24 @@ function Shell() {
       unlisten?.();
     };
   }, [handleDropped]);
+
+  // 以管理员身份运行时，Windows 会用 UIPI 拦掉「从资源管理器拖文件进来」，
+  // 界面上只会得到一个禁止图标、松手也没反应 —— 启动时说清楚，别让人以为是坏了
+  useEffect(() => {
+    if (!ready || !isTauri()) return;
+    let alive = true;
+    void isElevated().then((elevated) => {
+      if (alive && elevated) {
+        showToast(
+          "当前以管理员身份运行：从资源管理器拖入文件会被 Windows 拦截，建议取消「以管理员身份运行」后重开",
+          8000,
+        );
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ready, showToast]);
 
   // Esc 返回主视图；有弹窗开着时交给弹窗自己处理
   useEffect(() => {

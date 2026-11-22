@@ -10,7 +10,7 @@ import { ItemCard, useItemClipboard } from "./ItemCard";
  * 这里只负责网格容器（点空白取消选中、右键「添加 / 批量添加应用 / 粘贴」）。
  */
 export function ItemGrid() {
-  const { visibleItems, selectItem, reorderItems, clipboard } = useApp();
+  const { visibleItems, selectItem, reorderItems, clipboard, reload } = useApp();
   const { open } = useContextMenu();
   const { paste } = useItemClipboard();
   // 主视图里新增的条目是普通条目
@@ -46,6 +46,8 @@ export function ItemGrid() {
                 disabled: !clipboard,
                 onSelect: paste,
               },
+              { key: "sep", separator: true },
+              { key: "refresh", label: "刷新", onSelect: () => void reload() },
             ],
           });
         }}

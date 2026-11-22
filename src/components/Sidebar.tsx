@@ -6,7 +6,7 @@ import { useApp } from "../store";
 import { ALL_CATEGORY_ID, FAVORITES_CATEGORY_ID } from "../types";
 import type { Category } from "../types";
 import { useUi } from "../ui";
-import { cx } from "../util";
+import { cx, sameNameKey } from "../util";
 import { useContextMenu } from "./ContextMenu";
 
 /** 参考文档 A 列：收藏夹 / 全部 / 一级分类列表；A 列空白处右键只有「添加」 */
@@ -29,12 +29,14 @@ export function Sidebar() {
   const ids = useMemo(() => categories.map((category) => category.id), [categories]);
   const { handlers, activeId, overId, consumeDragClick } = useDragList(ids, reorderCategories);
 
-  // 计数不包含隐藏的条目；同名同路径的条目各算一条（添加前已经问过用户了）
+  // 计数与列表保持一致：具体分类照实计数，「全部」「收藏夹」按名称去重
   const visible = data.items.filter((item) => !item.hidden);
   const countOf = (categoryId: string) =>
     visible.filter((item) => item.categoryIds.includes(categoryId)).length;
-  const favoritesCount = visible.filter((item) => item.favorite).length;
-  const totalCount = visible.length;
+  const countNames = (list: typeof visible) =>
+    new Set(list.map((item) => sameNameKey(item.name))).size;
+  const favoritesCount = countNames(visible.filter((item) => item.favorite));
+  const totalCount = countNames(visible);
 
   // 提醒 / 数据管理 / 关于 这些页面不属于任何分类，因此不显示选中色
   const isMain = view === "main";

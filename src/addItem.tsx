@@ -8,12 +8,7 @@ import { useApp } from "./store";
 import { ALL_CATEGORY_ID, FAVORITES_CATEGORY_ID } from "./types";
 import type { IconData, Item, ItemKind } from "./types";
 import { useUi } from "./ui";
-import { baseName, uid } from "./util";
-
-/** 重名判定用的键：忽略大小写与首尾空格 */
-export function sameNameKey(name: string): string {
-  return name.trim().toLowerCase();
-}
+import { baseName, sameNameKey, uid } from "./util";
 
 /**
  * 新增条目前的统一守卫。

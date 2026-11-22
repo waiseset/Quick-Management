@@ -9,12 +9,15 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
 use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::SIZE;
+use windows::Win32::Foundation::{CloseHandle, HANDLE, SIZE};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
 };
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
+use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, ShellExecuteW, SIIGBF_BIGGERSIZEOK,
     SIIGBF_ICONONLY,
@@ -26,26 +29,140 @@ use crate::model::IconData;
 /// 图标最大边长（导出后体积可控）
 const ICON_MAX: u32 = 256;
 
-/// 打开目标：应用走 ShellExecuteW("open")，网址同样交给 ShellExecuteW 用默认浏览器打开
+/// 打开目标：应用走 ShellExecuteW("open")，网址同样交给 ShellExecuteW 用默认浏览器打开。
+///
+/// 有三件事少一件就会出现「打不开 / 打开后不能用」：
+/// 1. **展开 `%环境变量%`** —— 快捷方式里常常存着 `%ProgramFiles%\…`，
+///    直接丢给 ShellExecuteW 它不会帮你展开（老数据里也可能留着这种路径）；
+/// 2. **把起始位置设成目标所在目录** —— 不设的话子进程继承本应用的目录，
+///    依赖相对路径找配置 / DLL / 素材的程序会启动失败或行为异常；
+/// 3. 打开**快捷方式本身**时不指定目录，让系统按快捷方式里记录的「起始位置」启动。
 pub fn shell_open(target: &str) -> Result<(), String> {
+    // 用户可能把带引号的路径整段粘进来（"D:\Program Files\App\app.exe"）
+    let path = expand_env_vars(target.trim().trim_matches('"'));
+    if path.is_empty() {
+        return Err("路径或网址为空".into());
+    }
+
     let verb = HSTRING::from("open");
-    let file = HSTRING::from(target);
+    let file = HSTRING::from(path.as_str());
+    // 目录要在调用期间一直存活
+    let directory = launch_directory(&path).map(|dir| HSTRING::from(dir.to_string_lossy().as_ref()));
+
     let ret = unsafe {
+        // ShellExecuteW 内部要用到 shell 扩展，先确保这个线程初始化过 COM
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         ShellExecuteW(
             None,
             &verb,
             &file,
             PCWSTR::null(),
-            PCWSTR::null(),
+            directory
+                .as_ref()
+                .map_or(PCWSTR::null(), |dir| PCWSTR(dir.as_ptr())),
             SW_SHOWNORMAL,
         )
     };
     let code = ret.0 as isize;
     // ShellExecuteW 返回值 <= 32 表示失败
     if code <= 32 {
-        return Err(format!("系统无法打开「{target}」（错误码 {code}）"));
+        return Err(format!(
+            "系统无法打开「{path}」（{}）",
+            shell_error_text(code)
+        ));
     }
     Ok(())
+}
+
+/// 起始位置：只给本地普通文件设「所在目录」。
+///
+/// 网址、`shell:` 之类的伪协议、以及快捷方式都返回 None ——
+/// 快捷方式自带的「起始位置」是作者精心设好的，不能被我们覆盖掉。
+fn launch_directory(target: &str) -> Option<std::path::PathBuf> {
+    if target.contains("://") {
+        return None;
+    }
+    let path = Path::new(target);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(ext.as_str(), "lnk" | "url") {
+        return None;
+    }
+    if !path.is_file() {
+        return None;
+    }
+    path.parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.to_path_buf())
+}
+
+/// 把 `%ProgramFiles%\Foo` 这类路径展开成真实路径；没有变量或解析失败时原样返回
+pub fn expand_env_vars(text: &str) -> String {
+    if !text.contains('%') {
+        return text.to_string();
+    }
+    let source: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        let needed = ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), None);
+        if needed == 0 {
+            return text.to_string();
+        }
+        let mut buffer = vec![0u16; needed as usize];
+        let written = ExpandEnvironmentStringsW(PCWSTR(source.as_ptr()), Some(&mut buffer));
+        if written == 0 {
+            return text.to_string();
+        }
+        let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..end])
+    }
+}
+
+/// 当前进程是否以管理员权限（提权）运行。
+///
+/// 提权后 Windows 的 UIPI 会**禁止**把文件从资源管理器（普通权限）拖进本窗口 ——
+/// 拖动时只显示一个禁止图标，松手也不会产生任何事件，应用侧无法拦截或补救。
+/// 所以启动时把这件事告诉用户（见 App.tsx）。
+pub fn is_elevated() -> bool {
+    unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut elevation = TOKEN_ELEVATION::default();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            Some(&mut elevation as *mut _ as *mut c_void),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && elevation.TokenIsElevated != 0
+    }
+}
+
+/// ShellExecuteW 的失败码翻译成能看懂的提示（返回码 <= 32）
+fn shell_error_text(code: isize) -> String {
+    let reason = match code {
+        0 | 8 => "内存不足",
+        2 => "找不到该文件，可能已被移动或删除",
+        3 => "找不到该路径",
+        5 => "访问被拒绝，可能需要以管理员身份运行",
+        26 => "文件正在被占用",
+        27 => "文件关联不完整",
+        28 => "DDE 操作超时",
+        29 => "DDE 操作失败",
+        30 => "DDE 忙",
+        31 => "没有与之关联的程序",
+        32 => "找不到所需的 DLL",
+        _ => "未知错误",
+    };
+    format!("{reason}，错误码 {code}")
 }
 
 /// 在资源管理器中定位文件。
@@ -270,8 +387,9 @@ fn trim_transparent(img: image::RgbaImage) -> image::RgbaImage {
 
 #[cfg(test)]
 mod trim_tests {
-    use super::trim_transparent;
+    use super::{expand_env_vars, launch_directory, trim_transparent};
     use image::{Rgba, RgbaImage};
+    use std::path::PathBuf;
 
     /// 造一张 w×h 的画布，可指定其中一块不透明区域
     fn canvas(w: u32, h: u32, inner: Option<(u32, u32, u32, u32)>) -> RgbaImage {
@@ -323,6 +441,34 @@ mod trim_tests {
         let out = trim_transparent(img);
         let (w, h) = out.dimensions();
         assert!(w <= 20 && h <= 20, "应裁到主体附近，实际为 {w}×{h}");
+    }
+
+    #[test]
+    fn exe_gets_its_own_folder_as_working_directory() {
+        // 不设起始位置时子进程会继承本应用的目录，依赖相对路径资源的程序会异常
+        let dir = launch_directory(r"C:\Windows\System32\notepad.exe");
+        assert_eq!(dir, Some(PathBuf::from(r"C:\Windows\System32")));
+    }
+
+    #[test]
+    fn shortcuts_and_urls_keep_their_own_startup_settings() {
+        // .lnk 里的「起始位置」是作者设好的，不能被我们覆盖
+        assert_eq!(launch_directory(r"C:\Users\Tian\Desktop\Steam.lnk"), None);
+        assert_eq!(launch_directory(r"C:\Users\Tian\Desktop\GitHub.url"), None);
+        assert_eq!(launch_directory("https://example.com"), None);
+        // 不存在的路径不硬塞目录，免得 ShellExecuteW 报「找不到该路径」
+        assert_eq!(launch_directory(r"C:\No\Such\App\tool.exe"), None);
+    }
+
+    #[test]
+    fn environnment_variables_are_expanded_before_opening() {
+        let system_root = std::env::var("SystemRoot").expect("Windows 上一定有 SystemRoot");
+        assert_eq!(
+            expand_env_vars(r"%SystemRoot%\System32\notepad.exe"),
+            format!(r"{system_root}\System32\notepad.exe")
+        );
+        // 没有变量的普通路径原样返回
+        assert_eq!(expand_env_vars(r"D:\App\app.exe"), r"D:\App\app.exe");
     }
 }
 

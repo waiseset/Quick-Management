@@ -93,7 +93,10 @@ pub async fn check_paths(items: Vec<ItemCheck>) -> Vec<MissingPath> {
             .filter(|item| item.kind != ItemKind::Url)
             .filter(|item| {
                 let target = item.target.trim();
-                target.is_empty() || !Path::new(target).exists()
+                // 老数据里可能存着 %ProgramFiles%\… 这种没展开的路径，先展开再判断，
+                // 否则会被误报成「路径已失效」
+                let target = winapi::expand_env_vars(target.trim_matches('"'));
+                target.is_empty() || !Path::new(&target).exists()
             })
             .map(|item| MissingPath {
                 id: item.id,
@@ -127,6 +130,13 @@ pub async fn resolve_target(path: String) -> Option<String> {
         .await
         .ok()
         .flatten()
+}
+
+/// 当前是否以管理员身份运行。
+/// 提权后 Windows 的 UIPI 会拦掉从资源管理器拖入的文件，前端据此在启动时提示一句。
+#[tauri::command]
+pub fn is_elevated() -> bool {
+    winapi::is_elevated()
 }
 
 /// 隐藏区密码哈希：SHA-256(salt + 密码 + 固定后缀)，只把结果存进数据文件
