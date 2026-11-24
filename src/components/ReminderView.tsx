@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { checkPaths, revealInExplorer } from "../api";
 import { useApp } from "../store";
 import type { MissingPath } from "../types";
+import { ConfirmDialog } from "./Modal";
 
 /**
  * 参考文档「提醒页」：内容区顶部是「检查」按钮，下面是检查结果。
@@ -16,11 +17,13 @@ export function ReminderView() {
     ignoreOnce,
     ignoreForever,
     restoreIgnored,
+    removeItem,
     showToast,
   } = useApp();
   const [results, setResults] = useState<MissingPath[] | null>(null);
   const [checking, setChecking] = useState(false);
   const [showIgnored, setShowIgnored] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<MissingPath | null>(null);
   const itemsRef = useRef(data.items);
   itemsRef.current = data.items;
 
@@ -101,6 +104,13 @@ export function ReminderView() {
                   >
                     永久忽略
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-danger"
+                    onClick={() => setPendingDelete(entry)}
+                  >
+                    删除条目
+                  </button>
                 </div>
               </li>
             ))}
@@ -138,6 +148,23 @@ export function ReminderView() {
           </div>
         ) : null}
       </div>
+
+      {pendingDelete ? (
+        <ConfirmDialog
+          title="删除条目"
+          message={`确定删除「${pendingDelete.name}」吗？`}
+          description="只会从快捷管理中移除，不会删除磁盘上的文件；删除后无法恢复。"
+          confirmText="删除"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => {
+            removeItem(pendingDelete.id);
+            setResults((list) => (list ? list.filter((entry) => entry.id !== pendingDelete.id) : list));
+            setPendingDelete(null);
+            showToast(`「${pendingDelete.name}」已删除`);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

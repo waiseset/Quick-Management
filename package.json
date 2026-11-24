@@ -1,7 +1,7 @@
 {
   "name": "quick-manage",
   "private": true,
-  "version": "3.3.5",
+  "version": "3.3.6",
   "description": "快捷管理 - 本地应用与网址快捷方式管理器",
   "type": "module",
   "scripts": {
