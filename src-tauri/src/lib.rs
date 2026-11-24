@@ -14,6 +14,15 @@ use commands::{
 };
 
 pub fn run() {
+    // 快捷管理自身也做单实例：第二次启动不再开新进程，只把已有窗口置顶。
+    #[cfg(windows)]
+    if !winapi::claim_single_instance() {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = winapi::activate_running_app(&exe.to_string_lossy());
+        }
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         // Ctrl+F 让给应用自己的搜索框（见 TitleBar.tsx）：

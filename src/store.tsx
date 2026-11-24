@@ -415,16 +415,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
       view === "vault" ||
       selectedCategoryId === ALL_CATEGORY_ID ||
       selectedCategoryId === FAVORITES_CATEGORY_ID;
-    if (aggregate) {
-      const seen = new Set<string>();
-      list = list.filter((item) => {
-        const key = sameNameKey(item.name);
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
+
+    // 非收藏夹分区：收藏的条目整体提到最前，组内保持原有顺序（用户排好的首字母
+    // 顺序不重排，拖拽排序也照常生效）。收藏夹 / 隐藏页本身不分区，维持原样。
+    const favoritesFirst = view === "main" && selectedCategoryId !== FAVORITES_CATEGORY_ID;
+    let ordered = sortByOrder(list);
+    if (favoritesFirst) {
+      ordered = [
+        ...ordered.filter((item) => item.favorite),
+        ...ordered.filter((item) => !item.favorite),
+      ];
     }
-    return sortByOrder(list);
+
+    // 去重放在分区之后：聚合位置里同名的收藏条目优先留下，而不是被排在前面的
+    // 非收藏条目挤掉
+    if (!aggregate) return ordered;
+    const seen = new Set<string>();
+    return ordered.filter((item) => {
+      const key = sameNameKey(item.name);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }, [data.items, selectedCategoryId, selectedSubCategoryId, searchQuery, view]);
 
   const selectedItem = useMemo(() => {

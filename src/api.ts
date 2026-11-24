@@ -51,6 +51,7 @@ export async function saveData(data: AppData): Promise<void> {
 
 /* ------------------------------- 系统调用 ------------------------------- */
 
+/** 打开条目 */
 export async function openItem(kind: ItemKind, target: string): Promise<void> {
   if (isTauri()) {
     await invoke("open_item", { kind, target });

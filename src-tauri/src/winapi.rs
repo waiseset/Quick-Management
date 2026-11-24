@@ -8,23 +8,40 @@ use std::process::Command;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 
-use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, HANDLE, SIZE};
+use windows::core::{BOOL, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{
+    CloseHandle, GetLastError, SetLastError, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, HANDLE, HWND,
+    LPARAM, RECT, SIZE,
+};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, DIB_RGB_COLORS, HBITMAP, HGDIOBJ,
 };
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+    TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::Win32::System::Threading::{
+    AttachThreadInput, CreateMutexW, GetCurrentProcess, GetCurrentThreadId, OpenProcess,
+    OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, ShellExecuteW, SIIGBF_BIGGERSIZEOK,
     SIIGBF_ICONONLY,
 };
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    SetForegroundWindow, ShowWindow, SwitchToThisWindow, GWL_EXSTYLE, GW_OWNER, SW_RESTORE,
+    SW_SHOW, SW_SHOWNORMAL, WS_EX_TOOLWINDOW,
+};
 
 use crate::model::IconData;
+use crate::shortcut;
 
 /// 图标最大边长（导出后体积可控）
 const ICON_MAX: u32 = 256;
@@ -72,6 +89,296 @@ pub fn shell_open(target: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// 进程级单实例锁：返回 true 表示当前进程是唯一实例，可以继续创建窗口；
+/// 返回 false 表示已有实例在运行，应把已有窗口切到前台后直接退出。
+///
+/// 用命名互斥体而不是窗口标题：窗口标题会随页面变化，且第二实例启动时
+/// 第一实例可能还没创建窗口。互斥体句柄故意泄漏到进程结束，提前释放会让
+/// 单实例保护失效。
+pub fn claim_single_instance() -> bool {
+    let name = HSTRING::from("Local\\com.waiseset.quickmanage");
+    unsafe {
+        SetLastError(ERROR_SUCCESS);
+        match CreateMutexW(None, false, PCWSTR(name.as_ptr())) {
+            Ok(handle) => {
+                if GetLastError() == ERROR_ALREADY_EXISTS {
+                    let _ = CloseHandle(handle);
+                    false
+                } else {
+                    // HANDLE 没有 Drop，不调用 CloseHandle 就会一直持有到进程退出
+                    let _ = handle;
+                    true
+                }
+            }
+            // 互斥体创建失败时不拦住用户：宁可多开一个窗口，也不要打不开应用
+            Err(_) => true,
+        }
+    }
+}
+
+/// 把已经在运行的同路径实例窗口切到前台并返回 true；没有可用窗口则返回 false。
+///
+/// 现在只用于快捷管理自身的单实例：第二个进程启动时调用它把第一个窗口置顶。
+/// 仍然保留 .lnk 解析与宿主进程过滤，避免以后复用时误激活 explorer / cmd 等窗口。
+pub fn activate_running_app(target: &str) -> bool {
+    let Some(exe) = app_exe_path(target) else {
+        return false;
+    };
+    if is_host_process(&exe) {
+        return false;
+    }
+    for pid in find_process_ids(&exe) {
+        if let Some(hwnd) = best_window(pid) {
+            if focus_window(hwnd) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 把条目目标还原成可以按进程匹配的 exe 全路径
+fn app_exe_path(target: &str) -> Option<String> {
+    let target = expand_env_vars(target.trim().trim_matches('"'));
+    let path = if target.to_ascii_lowercase().ends_with(".lnk") {
+        shortcut::read_lnk(&target)?.target
+    } else {
+        target
+    };
+    let path = path.trim().trim_matches('"').to_string();
+    // 不要求 Path::is_file()：WindowsApps 等受保护目录普通权限读不到文件，
+    // 但进程仍在运行，应该以进程枚举结果为准。
+    if !path.to_ascii_lowercase().ends_with(".exe") {
+        return None;
+    }
+    Some(path)
+}
+
+/// 这些进程只是「载体」，同名的多个应用会共用它们，不能按 exe 当成应用本身
+fn is_host_process(path: &str) -> bool {
+    let name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "explorer.exe"
+            | "cmd.exe"
+            | "powershell.exe"
+            | "pwsh.exe"
+            | "wscript.exe"
+            | "cscript.exe"
+            | "mshta.exe"
+            | "rundll32.exe"
+            | "regsvr32.exe"
+            | "steam.exe"
+            | "steamwebhelper.exe"
+            | "epicgameslauncher.exe"
+            | "javaw.exe"
+            | "java.exe"
+            | "applicationframehost.exe"
+            | "runtimebroker.exe"
+            | "dllhost.exe"
+            | "svchost.exe"
+    )
+}
+
+/// 枚举所有进程，返回 exe 全路径与目标一致的进程 id
+fn find_process_ids(exe: &str) -> Vec<u32> {
+    let wanted = Path::new(exe)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if wanted.is_empty() {
+        return Vec::new();
+    }
+
+    let mut pids = Vec::new();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return pids;
+        };
+        let mut entry = PROCESSENTRY32W::default();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        let mut next = Process32FirstW(snapshot, &mut entry).is_ok();
+        while next {
+            // 先比 exe 文件名（几乎零成本），同名了再查全路径
+            let name = wide_array_to_string(&entry.szExeFile);
+            if name.eq_ignore_ascii_case(wanted)
+                && process_image_path(entry.th32ProcessID)
+                    .is_some_and(|path| same_path(&path, exe))
+            {
+                pids.push(entry.th32ProcessID);
+            }
+            next = Process32NextW(snapshot, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snapshot);
+    }
+    pids
+}
+
+/// 取进程的 exe 全路径（受保护的系统进程可能拿不到，忽略即可）
+fn process_image_path(pid: u32) -> Option<String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 32768];
+        let mut len = buffer.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(handle);
+        if !ok || len == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buffer[..len as usize]))
+    }
+}
+
+/// 路径比较：统一分隔符、去掉 `\\\\?\\` 前缀、忽略大小写
+fn same_path(a: &str, b: &str) -> bool {
+    normalize_path(a) == normalize_path(b)
+}
+
+fn normalize_path(path: &str) -> String {
+    let mut path = path.trim().trim_matches('"').replace('/', "\\");
+    if let Some(rest) = path.strip_prefix("\\\\?\\UNC\\") {
+        path = format!("\\\\{rest}");
+    } else if let Some(rest) = path.strip_prefix("\\\\?\\") {
+        path = rest.to_string();
+    }
+    path.to_lowercase()
+}
+
+fn wide_array_to_string(buffer: &[u16]) -> String {
+    let end = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+    String::from_utf16_lossy(&buffer[..end]).trim().to_string()
+}
+
+struct WindowSearch {
+    pid: u32,
+    best: Option<HWND>,
+    best_score: i64,
+}
+
+/// 在该进程的顶层窗口里挑一个最像「主窗口」的：
+/// 可见、无 owner、不是工具窗、面积大于 0，优先有标题的，再取面积最大的
+fn best_window(pid: u32) -> Option<HWND> {
+    let mut search = WindowSearch {
+        pid,
+        best: None,
+        best_score: i64::MIN,
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_window),
+            LPARAM(&mut search as *mut WindowSearch as isize),
+        );
+    }
+    search.best
+}
+
+unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    let search = &mut *(lparam.0 as *mut WindowSearch);
+    let mut window_pid = 0u32;
+    GetWindowThreadProcessId(hwnd, Some(&mut window_pid as *mut u32));
+    if window_pid != search.pid || !IsWindowVisible(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    // 有 owner 的通常是对话框 / 浮动工具窗；带 WS_EX_TOOLWINDOW 的也不进任务栏
+    if GetWindow(hwnd, GW_OWNER).is_ok() {
+        return BOOL(1);
+    }
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+        return BOOL(1);
+    }
+    let mut rect = RECT::default();
+    if GetWindowRect(hwnd, &mut rect).is_err() {
+        return BOOL(1);
+    }
+    // 坐标是 i32，直接相乘可能溢出 i64；屏幕尺寸封顶 10 万足够
+    let width = (rect.right - rect.left).clamp(0, 100_000) as i64;
+    let height = (rect.bottom - rect.top).clamp(0, 100_000) as i64;
+    if width == 0 || height == 0 {
+        return BOOL(1);
+    }
+    let title = window_title(hwnd);
+    let score = (if title.is_empty() { 0 } else { 1_000_000_000 }) + width * height;
+    if score > search.best_score {
+        search.best_score = score;
+        search.best = Some(hwnd);
+    }
+    BOOL(1)
+}
+
+fn window_title(hwnd: HWND) -> String {
+    unsafe {
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0u16; len as usize + 1];
+        let written = GetWindowTextW(hwnd, &mut buffer);
+        if written <= 0 {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buffer[..written as usize])
+    }
+}
+
+/// 还原（如果最小化了）+ 置前。Windows 默认禁止后台进程抢前台，
+/// 所以失败时把当前线程的输入队列临时挂到前台 / 目标线程上再抢一次。
+fn focus_window(hwnd: HWND) -> bool {
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        } else {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
+        if SetForegroundWindow(hwnd).as_bool() {
+            return true;
+        }
+
+        let current = GetCurrentThreadId();
+        let target_thread = GetWindowThreadProcessId(hwnd, None);
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.is_invalid() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, None)
+        };
+
+        let attach_foreground = foreground_thread != 0
+            && foreground_thread != current
+            && AttachThreadInput(current, foreground_thread, true).as_bool();
+        let attach_target = target_thread != 0
+            && target_thread != current
+            && AttachThreadInput(current, target_thread, true).as_bool();
+
+        let _ = BringWindowToTop(hwnd);
+        let foreground_ok = SetForegroundWindow(hwnd).as_bool();
+
+        if attach_target {
+            let _ = AttachThreadInput(current, target_thread, false);
+        }
+        if attach_foreground {
+            let _ = AttachThreadInput(current, foreground_thread, false);
+        }
+        if foreground_ok {
+            return true;
+        }
+        // 前台锁定时这个老 API 通常也能把窗口带到最前
+        SwitchToThisWindow(hwnd, true);
+        GetForegroundWindow() == hwnd
+    }
 }
 
 /// 起始位置：只给本地普通文件设「所在目录」。
@@ -469,6 +776,49 @@ mod trim_tests {
         );
         // 没有变量的普通路径原样返回
         assert_eq!(expand_env_vars(r"D:\App\app.exe"), r"D:\App\app.exe");
+    }
+
+    #[test]
+    fn paths_compare_after_normalizing_separators_and_prefixes() {
+        assert!(super::same_path(
+            r"C:\Program Files\App\app.exe",
+            r"c:/program files/app/app.exe"
+        ));
+        assert!(super::same_path(
+            r"\\?\C:\Program Files\App\app.exe",
+            r"C:\Program Files\App\app.exe"
+        ));
+        assert!(!super::same_path(
+            r"C:\Program Files\App\app.exe",
+            r"C:\Program Files\App\other.exe"
+        ));
+    }
+
+    #[test]
+    fn host_processes_are_not_treated_as_the_app() {
+        assert!(super::is_host_process(r"C:\Windows\explorer.exe"));
+        assert!(super::is_host_process(r"C:\Windows\System32\cmd.exe"));
+        assert!(!super::is_host_process(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ));
+    }
+
+    #[test]
+    #[ignore = "需要交互式桌面，手动运行：cargo test --lib activates_running_charmap -- --ignored"]
+    fn activates_running_charmap() {
+        let exe = r"C:\Windows\System32\charmap.exe";
+        if !std::path::Path::new(exe).is_file() {
+            return;
+        }
+        let mut child = std::process::Command::new(exe)
+            .spawn()
+            .expect("启动字符映射表");
+        // 给窗口一点创建时间；找不到窗口时 activate_running_app 会返回 false
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let activated = super::activate_running_app(exe);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(activated, "应识别到已运行的 charmap 并置顶窗口");
     }
 }
 

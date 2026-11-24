@@ -1,6 +1,6 @@
 [package]
 name = "quick-manage"
-version = "3.3.3"
+version = "3.3.5"
 description = "快捷管理 - 本地应用与网址快捷方式管理器"
 authors = ["waiseset"]
 edition = "2021"
@@ -40,6 +40,7 @@ windows = { version = "0.62", features = [
   "Win32_Security",
   "Win32_Storage_FileSystem",
   "Win32_System_Com",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Environment",
   "Win32_System_Threading",
   "Win32_UI_Shell",

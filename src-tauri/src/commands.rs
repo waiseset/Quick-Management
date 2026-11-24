@@ -35,7 +35,7 @@ pub fn save_data(app: AppHandle, data: AppData) -> Result<(), String> {
     storage::save(&app, &data)
 }
 
-/// 打开条目：应用用 ShellExecuteW 打开路径，网址用默认浏览器打开
+/// 打开条目：应用用 ShellExecuteW 打开路径，网址用默认浏览器打开。
 #[tauri::command]
 pub async fn open_item(kind: ItemKind, target: String) -> Result<(), String> {
     if target.trim().is_empty() {
